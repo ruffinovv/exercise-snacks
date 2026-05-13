@@ -47,6 +47,7 @@ function loadState() {
       perBreak: 2,
       notificationsEnabled: false,
       chimeEnabled: true,
+      nightMode: false,
       startSuggestedDate: today,
       manualStartDate: "",
       schedulePrepared: false,
@@ -66,6 +67,7 @@ function normalizeState(loaded) {
     perBreak: 2,
     notificationsEnabled: false,
     chimeEnabled: true,
+    nightMode: false,
     startSuggestedDate: localDateStamp(),
     manualStartDate: "",
     schedulePrepared: false,
@@ -564,6 +566,7 @@ function syncConfigFromControls() {
     perBreak: Number($("#perBreak").value || 2),
     notificationsEnabled: $("#notificationsEnabled").checked,
     chimeEnabled: $("#chimeEnabled").checked,
+    nightMode: $("#nightMode").checked,
     manualStartDate: localDateStamp(),
     schedulePrepared: true,
   };
@@ -582,6 +585,7 @@ function applyConfigToControls() {
     perBreak: Number(state.config?.perBreak || 2),
     notificationsEnabled: Boolean(state.config?.notificationsEnabled),
     chimeEnabled: state.config?.chimeEnabled !== false,
+    nightMode: Boolean(state.config?.nightMode),
     startSuggestedDate: shouldUseSuggestion ? today : state.config?.startSuggestedDate || today,
     manualStartDate: state.config?.manualStartDate || "",
     schedulePrepared: Boolean(state.config?.schedulePrepared),
@@ -594,8 +598,17 @@ function applyConfigToControls() {
   $("#perBreak").value = String(state.config.perBreak);
   $("#notificationsEnabled").checked = state.config.notificationsEnabled;
   $("#chimeEnabled").checked = state.config.chimeEnabled;
+  const nightMode = $("#nightMode");
+  if (nightMode) nightMode.checked = state.config.nightMode;
+  applyTheme();
   saveState();
   refreshClockSuggestion();
+}
+
+function applyTheme() {
+  const nightMode = Boolean(state?.config?.nightMode);
+  document.documentElement.dataset.theme = nightMode ? "night" : "day";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", nightMode ? "#0f1715" : "#16625b");
 }
 
 function refreshClockSuggestion(options = {}) {
@@ -661,7 +674,6 @@ function renderToday() {
     </section>
     <section class="panel">
       <div class="actions">
-        <button data-action="test-next-break" data-day="${day.trainingDay}">Test next break</button>
         <button data-action="reset-today" data-day="${day.trainingDay}">Reset today</button>
         <button class="secondary" data-action="skip-day" data-day="${day.trainingDay}">Skip this day</button>
       </div>
@@ -835,6 +847,13 @@ function renderSettings() {
         <p class="tiny">${notificationStatus}</p>
         <button data-action="enable-notifications">Enable reminders</button>
         <button data-action="test-chime">Test chime</button>
+      </div>
+      <div class="stat-card">
+        <h3>Appearance</h3>
+        <label class="check-label">
+          <input id="nightMode" type="checkbox" ${state.config.nightMode ? "checked" : ""}>
+          Night mode
+        </label>
       </div>
       <div class="stat-card">
         <h3>Export backup</h3>
@@ -1105,20 +1124,6 @@ async function testChime() {
   toast(played ? "Chime played" : "Chime is off");
 }
 
-function testNextBreak() {
-  const day = getNextDay();
-  if (!day) return;
-  const plannedWithIndex = day.entries
-    .map((entry, index) => ({ entry, index }))
-    .filter((item) => item.entry.status === "Planned");
-  if (!plannedWithIndex.length) return;
-  const slot = slotForIndex(plannedWithIndex[0].index);
-  const entries = plannedWithIndex
-    .filter((item) => slotForIndex(item.index) === slot)
-    .map((item) => item.entry);
-  showBreakNotification(slot, "Now", entries, { allowWithoutPermission: true, forceChime: true });
-}
-
 function clearNotificationTimers() {
   notificationTimers.forEach((timer) => window.clearTimeout(timer));
   notificationTimers = [];
@@ -1223,12 +1228,18 @@ document.addEventListener("click", (event) => {
   if (action === "change-day-workout") changeSelectedDayWorkout();
   if (action === "enable-notifications") enableNotifications();
   if (action === "test-chime") testChime();
-  if (action === "test-next-break") testNextBreak();
   if (action === "export") exportData();
   if (action === "reset") resetData();
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target?.id === "nightMode") {
+    state.config.nightMode = event.target.checked;
+    applyTheme();
+    saveState();
+    toast(state.config.nightMode ? "Night mode on" : "Night mode off");
+    return;
+  }
   if (event.target?.id !== "planDaySelect") return;
   const day = selectedPlanDay();
   const workoutSelect = $("#planWorkoutSelect");
