@@ -1,5 +1,5 @@
 const STORAGE_KEY = "exercise-snacks-state-v1";
-const PLAN_SCHEMA_VERSION = 2;
+const PLAN_SCHEMA_VERSION = 3;
 const DEFAULT_START_DATE = "2026-05-11";
 const PLAN_DAYS = 90;
 
@@ -76,7 +76,9 @@ function normalizeState(loaded) {
     planSchemaVersion: 0,
     ...(loaded?.config || {}),
   };
-  config.workoutOverrides = config.workoutOverrides || {};
+  config.workoutOverrides = Object.fromEntries(
+    Object.entries(config.workoutOverrides || {}).filter(([, workout]) => workoutChoices.includes(workout)),
+  );
   const firstTrainingDay = Array.isArray(loaded?.plan)
     ? loaded.plan.find((day) => day.trainingDay === 1)
     : null;
@@ -381,10 +383,7 @@ const trainingSequence = [
   "Core Synergistics", "X Stretch", "Kenpo X", "Core Synergistics",
 ];
 
-const workoutChoices = [...new Set([
-  ...trainingSequence,
-  ...Object.keys(workoutDefs),
-])].filter((workout) => workout && workout !== "Rest");
+const workoutChoices = [...new Set(trainingSequence)].filter((workout) => workout && workout !== "Rest");
 
 function cycle(items, times) {
   return Array.from({ length: times }, () => items).flat();
@@ -566,7 +565,7 @@ function syncConfigFromControls() {
     perBreak: Number($("#perBreak").value || 2),
     notificationsEnabled: $("#notificationsEnabled").checked,
     chimeEnabled: $("#chimeEnabled").checked,
-    nightMode: $("#nightMode").checked,
+    nightMode: $("#nightMode")?.checked ?? Boolean(state.config?.nightMode),
     manualStartDate: localDateStamp(),
     schedulePrepared: true,
   };
@@ -663,7 +662,7 @@ function renderToday() {
   let html = `
     <section class="panel summary">
       ${stat("Workout", day.workout)}
-      ${stat("Training day", `Day ${day.trainingDay}`)}
+      ${stat("Day", day.trainingDay)}
       ${stat("Done", `${completed}/${day.entries.length}`)}
       ${stat("Skipped", skipped)}
     </section>
@@ -689,7 +688,7 @@ function renderToday() {
   }
 
   if (!plannedEntries.length) {
-    html += `<section class="panel empty">This training day is complete. The next workout will appear automatically.</section>`;
+    html += `<section class="panel empty">This day is complete. The next workout will appear automatically.</section>`;
   }
   view.innerHTML = html;
   scheduleNotifications();
@@ -742,22 +741,24 @@ function renderPlan() {
   const trainingDays = state.plan.filter((day) => !day.isRest);
   const selectedDay = nextDay || trainingDays[0];
   const selectedTrainingDay = selectedDay?.trainingDay || 1;
+  const currentCalendarDay = nextDay?.calendarDay ?? Number.POSITIVE_INFINITY;
+  const planWorkoutChoices = [...new Set(trainingDays.map((day) => day.workout))];
   $("#planView").innerHTML = `
     <section class="panel">
       <h2>90-day plan</h2>
-      <p class="tiny">Pick any training day, choose its workout, or make that day today's session.</p>
+      <p class="tiny">Pick any day, choose its workout, or make that day today's session.</p>
     </section>
     <section class="panel plan-tools">
       <div>
         <h2>Adjust plan</h2>
-        <p class="tiny">Making a day current re-dates the plan around today and marks earlier training days complete.</p>
+        <p class="tiny">Making a day current re-dates the plan around today and marks earlier days complete.</p>
       </div>
       <label>
-        Training day
+        Day
         <select id="planDaySelect">
           ${trainingDays.map((day) => `
             <option value="${day.trainingDay}" ${day.trainingDay === selectedTrainingDay ? "selected" : ""}>
-              Training day ${day.trainingDay} - ${escapeHtml(day.workout)}
+              Day ${day.trainingDay}
             </option>
           `).join("")}
         </select>
@@ -765,7 +766,7 @@ function renderPlan() {
       <label>
         Workout
         <select id="planWorkoutSelect">
-          ${workoutChoices.map((workout) => `
+          ${planWorkoutChoices.map((workout) => `
             <option value="${escapeHtml(workout)}" ${workout === selectedDay?.workout ? "selected" : ""}>${escapeHtml(workout)}</option>
           `).join("")}
         </select>
@@ -778,9 +779,11 @@ function renderPlan() {
     <div class="plan-grid">
       ${state.plan.map((day) => {
         const status = getDayStatus(day);
+        const isPastRestDay = day.isRest && day.calendarDay < currentCalendarDay;
+        const isMarked = status === "Complete" || isPastRestDay;
         return `
-          <article class="day-card ${status === "Complete" ? "done" : ""}">
-            <strong>${day.trainingDay ? `Training day ${day.trainingDay}` : `Rest day ${day.calendarDay}`}</strong>
+          <article class="day-card ${isMarked ? "done" : ""}">
+            <strong>${day.trainingDay ? `Day ${day.trainingDay}` : `Rest day ${day.calendarDay}`}</strong>
             <div>${day.date}</div>
             <div class="tiny">${escapeHtml(day.phase)} - Week ${day.week}</div>
             <div>${escapeHtml(day.workout)}</div>
@@ -937,14 +940,14 @@ function skipCurrentDay() {
     }
   });
   saveState();
-  toast("Training day skipped");
+  toast("Day skipped");
   render();
 }
 
 function resetToday() {
   const day = getNextDay();
   if (!day) return;
-  if (!confirm("Reset today and clear all Done/Skipped entries for this training day?")) return;
+  if (!confirm("Reset today and clear all Done/Skipped entries for this day?")) return;
   day.entries.forEach((entry) => {
     entry.status = "Planned";
     entry.actualReps = "";
