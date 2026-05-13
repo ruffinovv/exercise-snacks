@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#16625b">
+    <title>Exercise Snacks</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./styles.css?v=7">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Local-first movement breaks</p>
+        <h1>Exercise Snacks</h1>
+      </div>
+      <button id="installButton" class="icon-button" hidden title="Install app">Install</button>
+    </header>
+
+    <main>
+      <section class="toolbar" aria-label="Daily schedule settings">
+        <label>
+          Start (24h)
+          <select id="startTime"></select>
+        </label>
+        <label>
+          Interval
+          <select id="intervalMinutes"></select>
+        </label>
+        <label>
+          Per break
+          <select id="perBreak"></select>
+        </label>
+        <label class="check-label">
+          <input id="notificationsEnabled" type="checkbox">
+          Notifications
+        </label>
+        <button id="prepareDay" class="primary">Prepare</button>
+        <div id="clockHint" class="clock-hint" aria-live="polite"></div>
+      </section>
+
+      <nav class="tabs" aria-label="Views">
+        <button class="tab active" data-view="today">Today</button>
+        <button class="tab" data-view="plan">Plan</button>
+        <button class="tab" data-view="progress">Progress</button>
+        <button class="tab" data-view="settings">Settings</button>
+      </nav>
+
+      <section id="todayView" class="view active-view"></section>
+      <section id="planView" class="view"></section>
+      <section id="progressView" class="view"></section>
+      <section id="settingsView" class="view"></section>
+    </main>
+
+    <dialog id="actualDialog">
+      <form method="dialog" class="dialog-form">
+        <h2 id="dialogTitle">Record actual</h2>
+        <input id="dialogEntryId" type="hidden">
+        <label>
+          Actual reps
+          <input id="actualReps" type="number" min="0" step="1">
+        </label>
+        <label>
+          Actual weight (kg)
+          <input id="actualWeight" type="number" min="0" step="0.5">
+        </label>
+        <label>
+          Note
+          <input id="actualNote" type="text" placeholder="Optional">
+        </label>
+        <div class="dialog-actions">
+          <button value="cancel">Cancel</button>
+          <button id="saveActual" class="primary" value="default">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js?v=7"></script>
+  </body>
+</html>

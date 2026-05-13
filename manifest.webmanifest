@@ -1,0 +1,17 @@
+{
+  "name": "Exercise Snacks",
+  "short_name": "Snacks",
+  "description": "Small exercise breaks for people who work at a desk.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f4f7f6",
+  "theme_color": "#16625b",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
