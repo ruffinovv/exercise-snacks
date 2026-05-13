@@ -43,6 +43,7 @@ https://ruffinovv.github.io/exercise-snacks/
 - 90-day seeded workout plan starting on May 13, 2026.
 - Start time, break interval, and exercises-per-break controls.
 - Daily break schedule with target reps and target weights.
+- Plan adjustment controls to set the current training day or change a selected day's workout.
 - Done, actual-result, skip-exercise, and skip-day flows.
 - Progress and plan views.
 - Local browser persistence.

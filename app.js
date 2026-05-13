@@ -1,5 +1,5 @@
 const STORAGE_KEY = "exercise-snacks-state-v1";
-const START_DATE = "2026-05-13";
+const START_DATE = "2026-05-11";
 const PLAN_DAYS = 90;
 
 const user = {
@@ -320,14 +320,19 @@ const workoutDefs = {
 };
 
 const trainingSequence = [
-  ...cycle(["Plyometrics", "Shoulders & Arms + Ab Ripper X", "Legs & Back + Ab Ripper X", "Kenpo X", "Chest & Back + Ab Ripper X"], 3),
+  ...cycle(["Chest & Back + Ab Ripper X", "Plyometrics", "Shoulders & Arms + Ab Ripper X", "Legs & Back + Ab Ripper X", "Kenpo X"], 3),
   "Core Synergistics", "X Stretch", "Kenpo X", "Core Synergistics", "X Stretch",
-  ...cycle(["Plyometrics", "Back & Biceps + Ab Ripper X", "Legs & Back + Ab Ripper X", "Kenpo X", "Chest Shoulders & Triceps + Ab Ripper X"], 3),
+  ...cycle(["Chest Shoulders & Triceps + Ab Ripper X", "Plyometrics", "Back & Biceps + Ab Ripper X", "Legs & Back + Ab Ripper X", "Kenpo X"], 3),
   "Core Synergistics", "X Stretch", "Kenpo X", "Core Synergistics", "X Stretch",
-  ...cycle(["Plyometrics", "Shoulders & Arms + Ab Ripper X", "Legs & Back + Ab Ripper X", "Kenpo X", "Chest & Back + Ab Ripper X"], 2),
-  ...cycle(["Plyometrics", "Back & Biceps + Ab Ripper X", "Legs & Back + Ab Ripper X", "Kenpo X", "Chest Shoulders & Triceps + Ab Ripper X"], 2),
+  ...cycle(["Chest & Back + Ab Ripper X", "Plyometrics", "Shoulders & Arms + Ab Ripper X", "Legs & Back + Ab Ripper X", "Kenpo X"], 2),
+  ...cycle(["Chest Shoulders & Triceps + Ab Ripper X", "Plyometrics", "Back & Biceps + Ab Ripper X", "Legs & Back + Ab Ripper X", "Kenpo X"], 2),
   "Core Synergistics", "X Stretch", "Kenpo X", "Core Synergistics",
 ];
+
+const workoutChoices = [...new Set([
+  ...trainingSequence,
+  ...Object.keys(workoutDefs),
+])].filter((workout) => workout && workout !== "Rest");
 
 function cycle(items, times) {
   return Array.from({ length: times }, () => items).flat();
@@ -335,8 +340,7 @@ function cycle(items, times) {
 
 function generatePlan() {
   const plan = [];
-  const exerciseExposure = {};
-  const occurrenceExposure = {};
+  const exposureState = createExposureState();
   let trainingIndex = 0;
 
   for (let calendarDay = 1; calendarDay <= PLAN_DAYS; calendarDay += 1) {
@@ -365,49 +369,71 @@ function generatePlan() {
     };
 
     if (!dayPlan.isRest) {
-      workout.split(" + ").forEach((part) => {
-        const moves = workoutDefs[part] || [];
-        moves.forEach((move, index) => {
-          const occurrenceKey = `${date}|${part}|${move.baseOrder || index + 1}|${move.exercise}`;
-          let exposure = occurrenceExposure[occurrenceKey];
-          if (exposure === undefined) {
-            exposure = exerciseExposure[move.exercise] || 0;
-            occurrenceExposure[occurrenceKey] = exposure;
-            exerciseExposure[move.exercise] = exposure + 1;
-          }
-          const setNo = move.set || 1;
-          const targetReps = move.targetKind ? strengthTarget(move.targetKind, setNo, exposure) : move.target;
-          const baseWeight = Number(move.weight);
-          const weightKind = baseWeight <= 8 ? "small" : baseWeight >= 16 ? "large" : "normal";
-          const targetWeight = baseWeight ? weightTarget(baseWeight, exposure, weightKind) : "";
-          dayPlan.entries.push({
-            id: `${date}-${dayPlan.entries.length + 1}-${slug(move.exercise)}`,
-            date,
-            calendarDay,
-            trainingDay,
-            week,
-            phase,
-            workout: part,
-            section: move.section || "Main",
-            set: setNo,
-            exerciseOrder: index + 1,
-            exercise: move.exercise,
-            trackingType: move.trackingType || "Reps",
-            targetReps,
-            actualReps: "",
-            targetWeight,
-            actualWeight: "",
-            status: "Planned",
-            completedAt: "",
-            notes: "",
-          });
-        });
-      });
+      dayPlan.entries = buildWorkoutEntries(dayPlan, workout, exposureState);
       trainingIndex += 1;
     }
     plan.push(dayPlan);
   }
   return plan;
+}
+
+function createExposureState() {
+  return { exerciseExposure: {}, occurrenceExposure: {} };
+}
+
+function exposureBeforeTrainingDay(trainingDay) {
+  const exposureState = createExposureState();
+  state.plan
+    .filter((day) => !day.isRest && day.trainingDay < trainingDay)
+    .flatMap((day) => day.entries)
+    .forEach((entry) => {
+      exposureState.exerciseExposure[entry.exercise] = (exposureState.exerciseExposure[entry.exercise] || 0) + 1;
+    });
+  return exposureState;
+}
+
+function buildWorkoutEntries(dayPlan, workout, exposureState) {
+  const entries = [];
+  if (!workout || workout === "Rest") return entries;
+  workout.split(" + ").forEach((part) => {
+    const moves = workoutDefs[part] || [];
+    moves.forEach((move, index) => {
+      const occurrenceKey = `${dayPlan.date}|${part}|${move.baseOrder || index + 1}|${move.exercise}`;
+      let exposure = exposureState.occurrenceExposure[occurrenceKey];
+      if (exposure === undefined) {
+        exposure = exposureState.exerciseExposure[move.exercise] || 0;
+        exposureState.occurrenceExposure[occurrenceKey] = exposure;
+        exposureState.exerciseExposure[move.exercise] = exposure + 1;
+      }
+      const setNo = move.set || 1;
+      const targetReps = move.targetKind ? strengthTarget(move.targetKind, setNo, exposure) : move.target;
+      const baseWeight = Number(move.weight);
+      const weightKind = baseWeight <= 8 ? "small" : baseWeight >= 16 ? "large" : "normal";
+      const targetWeight = baseWeight ? weightTarget(baseWeight, exposure, weightKind) : "";
+      entries.push({
+        id: `${dayPlan.date}-${entries.length + 1}-${slug(move.exercise)}`,
+        date: dayPlan.date,
+        calendarDay: dayPlan.calendarDay,
+        trainingDay: dayPlan.trainingDay,
+        week: dayPlan.week,
+        phase: dayPlan.phase,
+        workout: part,
+        section: move.section || "Main",
+        set: setNo,
+        exerciseOrder: index + 1,
+        exercise: move.exercise,
+        trackingType: move.trackingType || "Reps",
+        targetReps,
+        actualReps: "",
+        targetWeight,
+        actualWeight: "",
+        status: "Planned",
+        completedAt: "",
+        notes: "",
+      });
+    });
+  });
+  return entries;
 }
 
 function slug(value) {
@@ -646,10 +672,42 @@ function exerciseRow(entry) {
 }
 
 function renderPlan() {
+  const nextDay = getNextDay();
+  const trainingDays = state.plan.filter((day) => !day.isRest);
+  const selectedDay = nextDay || trainingDays[0];
+  const selectedTrainingDay = selectedDay?.trainingDay || 1;
   $("#planView").innerHTML = `
     <section class="panel">
       <h2>90-day plan</h2>
       <p class="tiny">Weekends are rest. Skipping a day pauses progress; the next unfinished day stays next.</p>
+    </section>
+    <section class="panel plan-tools">
+      <div>
+        <h2>Adjust plan</h2>
+        <p class="tiny">Use this if browser data gets reset or today should use a different workout.</p>
+      </div>
+      <label>
+        Training day
+        <select id="planDaySelect">
+          ${trainingDays.map((day) => `
+            <option value="${day.trainingDay}" ${day.trainingDay === selectedTrainingDay ? "selected" : ""}>
+              Day ${day.trainingDay} - ${day.weekday}, ${day.date} - ${escapeHtml(day.workout)}
+            </option>
+          `).join("")}
+        </select>
+      </label>
+      <label>
+        Workout
+        <select id="planWorkoutSelect">
+          ${workoutChoices.map((workout) => `
+            <option value="${escapeHtml(workout)}" ${workout === selectedDay?.workout ? "selected" : ""}>${escapeHtml(workout)}</option>
+          `).join("")}
+        </select>
+      </label>
+      <div class="actions plan-tool-actions">
+        <button class="secondary" data-action="set-current-day">Make selected day current</button>
+        <button data-action="change-day-workout">Change selected workout</button>
+      </div>
     </section>
     <div class="plan-grid">
       ${state.plan.map((day) => {
@@ -825,6 +883,58 @@ function resetToday() {
   render();
 }
 
+function resetEntryProgress(entry) {
+  entry.status = "Planned";
+  entry.actualReps = "";
+  entry.actualWeight = "";
+  entry.completedAt = "";
+  entry.notes = "";
+}
+
+function selectedPlanDay() {
+  const trainingDay = Number($("#planDaySelect")?.value);
+  return state.plan.find((day) => day.trainingDay === trainingDay) || null;
+}
+
+function setCurrentTrainingDay() {
+  const day = selectedPlanDay();
+  if (!day) return;
+  if (!confirm(`Make training day ${day.trainingDay} the current session? Earlier unfinished workouts will be skipped.`)) return;
+  const now = new Date().toISOString();
+  state.plan.forEach((item) => {
+    if (item.isRest) return;
+    if (item.trainingDay < day.trainingDay) {
+      item.entries.forEach((entry) => {
+        if (entry.status === "Planned") {
+          entry.status = "Skipped";
+          entry.notes = "Skipped before current day adjustment";
+          entry.completedAt = now;
+        }
+      });
+      return;
+    }
+    if (item.trainingDay >= day.trainingDay) {
+      item.entries.forEach(resetEntryProgress);
+    }
+  });
+  saveState();
+  toast(`Current session set to day ${day.trainingDay}`);
+  render();
+}
+
+function changeSelectedDayWorkout() {
+  const day = selectedPlanDay();
+  const workout = $("#planWorkoutSelect")?.value;
+  if (!day || !workout) return;
+  if (!confirm(`Change training day ${day.trainingDay} to ${workout}? This resets that day's exercise rows.`)) return;
+  day.workout = workout;
+  day.isRest = false;
+  day.entries = buildWorkoutEntries(day, workout, exposureBeforeTrainingDay(day.trainingDay));
+  saveState();
+  toast("Workout updated");
+  render();
+}
+
 function exportData() {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
@@ -963,9 +1073,18 @@ document.addEventListener("click", (event) => {
   if (action === "skip") skipEntry(id);
   if (action === "skip-day") skipCurrentDay();
   if (action === "reset-today") resetToday();
+  if (action === "set-current-day") setCurrentTrainingDay();
+  if (action === "change-day-workout") changeSelectedDayWorkout();
   if (action === "enable-notifications") enableNotifications();
   if (action === "export") exportData();
   if (action === "reset") resetData();
+});
+
+document.addEventListener("change", (event) => {
+  if (event.target?.id !== "planDaySelect") return;
+  const day = selectedPlanDay();
+  const workoutSelect = $("#planWorkoutSelect");
+  if (day && workoutSelect) workoutSelect.value = day.workout;
 });
 
 document.querySelectorAll(".tab").forEach((tab) => {

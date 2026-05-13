@@ -331,6 +331,17 @@ button {
   gap: 12px;
 }
 
+.plan-tools {
+  display: grid;
+  grid-template-columns: 1.2fr minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.plan-tool-actions {
+  min-width: 230px;
+}
+
 .day-card,
 .stat-card {
   padding: 12px;
@@ -414,6 +425,14 @@ dialog::backdrop {
 
   .exercise-row {
     grid-template-columns: 1fr;
+  }
+
+  .plan-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-tool-actions {
+    min-width: 0;
   }
 
   .actions {
