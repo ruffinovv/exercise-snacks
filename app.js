@@ -1,5 +1,5 @@
 const STORAGE_KEY = "exercise-snacks-state-v1";
-const START_DATE = "2026-05-11";
+const DEFAULT_START_DATE = "2026-05-11";
 const PLAN_DAYS = 90;
 
 const user = {
@@ -36,9 +36,9 @@ const PER_BREAK_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1);
 
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) return JSON.parse(saved);
+  if (saved) return normalizeState(JSON.parse(saved));
   const today = localDateStamp();
-  return {
+  return normalizeState({
     config: {
       startTime: suggestedStartTime(new Date(), 30),
       intervalMinutes: 30,
@@ -47,9 +47,32 @@ function loadState() {
       startSuggestedDate: today,
       manualStartDate: "",
       schedulePrepared: false,
+      planStartDate: DEFAULT_START_DATE,
+      workoutOverrides: {},
     },
-    plan: generatePlan(),
+    plan: generatePlan(DEFAULT_START_DATE),
     createdAt: new Date().toISOString(),
+  });
+}
+
+function normalizeState(loaded) {
+  const config = {
+    startTime: suggestedStartTime(new Date(), 30),
+    intervalMinutes: 30,
+    perBreak: 2,
+    notificationsEnabled: false,
+    startSuggestedDate: localDateStamp(),
+    manualStartDate: "",
+    schedulePrepared: false,
+    planStartDate: DEFAULT_START_DATE,
+    workoutOverrides: {},
+    ...(loaded?.config || {}),
+  };
+  config.workoutOverrides = config.workoutOverrides || {};
+  return {
+    config,
+    plan: Array.isArray(loaded?.plan) ? loaded.plan : generatePlan(config.planStartDate, config.workoutOverrides),
+    createdAt: loaded?.createdAt || new Date().toISOString(),
   };
 }
 
@@ -93,6 +116,18 @@ function startTimeOptions() {
 function addDays(date, days) {
   const d = new Date(`${date}T00:00:00`);
   d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function addWeekdays(date, days) {
+  const d = new Date(`${date}T00:00:00`);
+  const direction = days < 0 ? -1 : 1;
+  let remaining = Math.abs(days);
+  while (remaining > 0) {
+    d.setDate(d.getDate() + direction);
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) remaining -= 1;
+  }
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
@@ -338,13 +373,13 @@ function cycle(items, times) {
   return Array.from({ length: times }, () => items).flat();
 }
 
-function generatePlan() {
+function generatePlan(startDate = DEFAULT_START_DATE, workoutOverrides = {}) {
   const plan = [];
   const exposureState = createExposureState();
   let trainingIndex = 0;
 
   for (let calendarDay = 1; calendarDay <= PLAN_DAYS; calendarDay += 1) {
-    const date = addDays(START_DATE, calendarDay - 1);
+    const date = addDays(startDate, calendarDay - 1);
     const day = new Date(`${date}T00:00:00`).getDay();
     const isWeekend = day === 0 || day === 6;
     const week = Math.floor((calendarDay - 1) / 7) + 1;
@@ -355,7 +390,7 @@ function generatePlan() {
       trainingIndex < 35 ? "Phase 2" :
       trainingIndex < 40 ? "Recovery 2" :
       trainingIndex < 60 ? "Phase 3" : "Final Recovery";
-    const workout = isWeekend ? "Rest" : trainingSequence[trainingIndex] || "Rest";
+    const workout = isWeekend ? "Rest" : workoutOverrides[trainingDay] || trainingSequence[trainingIndex] || "Rest";
     const dayPlan = {
       calendarDay,
       trainingDay,
@@ -597,7 +632,7 @@ function renderToday() {
   let html = `
     <section class="panel summary">
       ${stat("Workout", day.workout)}
-      ${stat("Date", `${day.weekday}, ${day.date}`)}
+      ${stat("Training day", `Day ${day.trainingDay}`)}
       ${stat("Done", `${completed}/${day.entries.length}`)}
       ${stat("Skipped", skipped)}
     </section>
@@ -679,19 +714,19 @@ function renderPlan() {
   $("#planView").innerHTML = `
     <section class="panel">
       <h2>90-day plan</h2>
-      <p class="tiny">Weekends are rest. Skipping a day pauses progress; the next unfinished day stays next.</p>
+      <p class="tiny">Pick any training day, choose its workout, or make that day today's session.</p>
     </section>
     <section class="panel plan-tools">
       <div>
         <h2>Adjust plan</h2>
-        <p class="tiny">Use this if browser data gets reset or today should use a different workout.</p>
+        <p class="tiny">Making a day current re-dates the plan around today and marks earlier training days complete.</p>
       </div>
       <label>
         Training day
         <select id="planDaySelect">
           ${trainingDays.map((day) => `
             <option value="${day.trainingDay}" ${day.trainingDay === selectedTrainingDay ? "selected" : ""}>
-              Day ${day.trainingDay} - ${day.weekday}, ${day.date} - ${escapeHtml(day.workout)}
+              Day ${day.trainingDay} - ${escapeHtml(day.workout)}
             </option>
           `).join("")}
         </select>
@@ -705,7 +740,7 @@ function renderPlan() {
         </select>
       </label>
       <div class="actions plan-tool-actions">
-        <button class="secondary" data-action="set-current-day">Make selected day current</button>
+        <button class="secondary" data-action="set-current-day">Make this today</button>
         <button data-action="change-day-workout">Change selected workout</button>
       </div>
     </section>
@@ -891,26 +926,36 @@ function resetEntryProgress(entry) {
   entry.notes = "";
 }
 
+function completeEntry(entry, completedAt) {
+  entry.status = "Done";
+  entry.actualReps = entry.targetReps;
+  entry.actualWeight = entry.targetWeight;
+  entry.completedAt = completedAt;
+  entry.notes = "Marked complete by plan adjustment";
+}
+
 function selectedPlanDay() {
   const trainingDay = Number($("#planDaySelect")?.value);
   return state.plan.find((day) => day.trainingDay === trainingDay) || null;
 }
 
+function planStartDateForTodayTrainingDay(trainingDay) {
+  return addWeekdays(localDateStamp(), -(trainingDay - 1));
+}
+
 function setCurrentTrainingDay() {
   const day = selectedPlanDay();
+  const workout = $("#planWorkoutSelect")?.value;
   if (!day) return;
-  if (!confirm(`Make training day ${day.trainingDay} the current session? Earlier unfinished workouts will be skipped.`)) return;
+  if (!confirm(`Make training day ${day.trainingDay} today's session? Earlier training days will be marked complete.`)) return;
+  if (workout) state.config.workoutOverrides[day.trainingDay] = workout;
   const now = new Date().toISOString();
+  state.config.planStartDate = planStartDateForTodayTrainingDay(day.trainingDay);
+  state.plan = generatePlan(state.config.planStartDate, state.config.workoutOverrides);
   state.plan.forEach((item) => {
     if (item.isRest) return;
     if (item.trainingDay < day.trainingDay) {
-      item.entries.forEach((entry) => {
-        if (entry.status === "Planned") {
-          entry.status = "Skipped";
-          entry.notes = "Skipped before current day adjustment";
-          entry.completedAt = now;
-        }
-      });
+      item.entries.forEach((entry) => completeEntry(entry, now));
       return;
     }
     if (item.trainingDay >= day.trainingDay) {
@@ -927,6 +972,7 @@ function changeSelectedDayWorkout() {
   const workout = $("#planWorkoutSelect")?.value;
   if (!day || !workout) return;
   if (!confirm(`Change training day ${day.trainingDay} to ${workout}? This resets that day's exercise rows.`)) return;
+  state.config.workoutOverrides[day.trainingDay] = workout;
   day.workout = workout;
   day.isRest = false;
   day.entries = buildWorkoutEntries(day, workout, exposureBeforeTrainingDay(day.trainingDay));
