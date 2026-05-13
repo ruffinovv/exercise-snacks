@@ -1,9 +1,9 @@
-const CACHE_NAME = "exercise-snacks-v9";
+const CACHE_NAME = "exercise-snacks-v18";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=9",
-  "./app.js?v=9",
+  "./styles.css?v=18",
+  "./app.js?v=18",
   "./manifest.webmanifest",
   "./icon.svg",
 ];

@@ -1,4 +1,5 @@
 const STORAGE_KEY = "exercise-snacks-state-v1";
+const PLAN_SCHEMA_VERSION = 2;
 const DEFAULT_START_DATE = "2026-05-11";
 const PLAN_DAYS = 90;
 
@@ -30,6 +31,7 @@ const $ = (selector) => document.querySelector(selector);
 let state;
 let deferredInstallPrompt = null;
 let notificationTimers = [];
+let chimeContext = null;
 const START_STEP_MINUTES = 5;
 const INTERVAL_OPTIONS = Array.from({ length: 12 }, (_, index) => (index + 1) * 5);
 const PER_BREAK_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1);
@@ -44,11 +46,13 @@ function loadState() {
       intervalMinutes: 30,
       perBreak: 2,
       notificationsEnabled: false,
+      chimeEnabled: true,
       startSuggestedDate: today,
       manualStartDate: "",
       schedulePrepared: false,
       planStartDate: DEFAULT_START_DATE,
       workoutOverrides: {},
+      planSchemaVersion: PLAN_SCHEMA_VERSION,
     },
     plan: generatePlan(DEFAULT_START_DATE),
     createdAt: new Date().toISOString(),
@@ -61,17 +65,28 @@ function normalizeState(loaded) {
     intervalMinutes: 30,
     perBreak: 2,
     notificationsEnabled: false,
+    chimeEnabled: true,
     startSuggestedDate: localDateStamp(),
     manualStartDate: "",
     schedulePrepared: false,
     planStartDate: DEFAULT_START_DATE,
     workoutOverrides: {},
+    planSchemaVersion: 0,
     ...(loaded?.config || {}),
   };
   config.workoutOverrides = config.workoutOverrides || {};
+  const firstTrainingDay = Array.isArray(loaded?.plan)
+    ? loaded.plan.find((day) => day.trainingDay === 1)
+    : null;
+  const hasStaleWorkoutOrder = firstTrainingDay?.workout !== "Chest & Back + Ab Ripper X";
+  const shouldRebuildPlan = !Array.isArray(loaded?.plan) || config.planSchemaVersion !== PLAN_SCHEMA_VERSION || hasStaleWorkoutOrder;
+  const plan = shouldRebuildPlan
+    ? generatePlan(config.planStartDate, config.workoutOverrides)
+    : loaded.plan;
+  config.planSchemaVersion = PLAN_SCHEMA_VERSION;
   return {
     config,
-    plan: Array.isArray(loaded?.plan) ? loaded.plan : generatePlan(config.planStartDate, config.workoutOverrides),
+    plan,
     createdAt: loaded?.createdAt || new Date().toISOString(),
   };
 }
@@ -548,6 +563,7 @@ function syncConfigFromControls() {
     intervalMinutes,
     perBreak: Number($("#perBreak").value || 2),
     notificationsEnabled: $("#notificationsEnabled").checked,
+    chimeEnabled: $("#chimeEnabled").checked,
     manualStartDate: localDateStamp(),
     schedulePrepared: true,
   };
@@ -565,6 +581,7 @@ function applyConfigToControls() {
     intervalMinutes,
     perBreak: Number(state.config?.perBreak || 2),
     notificationsEnabled: Boolean(state.config?.notificationsEnabled),
+    chimeEnabled: state.config?.chimeEnabled !== false,
     startSuggestedDate: shouldUseSuggestion ? today : state.config?.startSuggestedDate || today,
     manualStartDate: state.config?.manualStartDate || "",
     schedulePrepared: Boolean(state.config?.schedulePrepared),
@@ -576,6 +593,7 @@ function applyConfigToControls() {
   $("#intervalMinutes").value = String(state.config.intervalMinutes);
   $("#perBreak").value = String(state.config.perBreak);
   $("#notificationsEnabled").checked = state.config.notificationsEnabled;
+  $("#chimeEnabled").checked = state.config.chimeEnabled;
   saveState();
   refreshClockSuggestion();
 }
@@ -643,6 +661,7 @@ function renderToday() {
     </section>
     <section class="panel">
       <div class="actions">
+        <button data-action="test-next-break" data-day="${day.trainingDay}">Test next break</button>
         <button data-action="reset-today" data-day="${day.trainingDay}">Reset today</button>
         <button class="secondary" data-action="skip-day" data-day="${day.trainingDay}">Skip this day</button>
       </div>
@@ -726,7 +745,7 @@ function renderPlan() {
         <select id="planDaySelect">
           ${trainingDays.map((day) => `
             <option value="${day.trainingDay}" ${day.trainingDay === selectedTrainingDay ? "selected" : ""}>
-              Day ${day.trainingDay} - ${escapeHtml(day.workout)}
+              Training day ${day.trainingDay} - ${escapeHtml(day.workout)}
             </option>
           `).join("")}
         </select>
@@ -749,7 +768,7 @@ function renderPlan() {
         const status = getDayStatus(day);
         return `
           <article class="day-card ${status === "Complete" ? "done" : ""}">
-            <strong>${day.calendarDay}. ${day.weekday}</strong>
+            <strong>${day.trainingDay ? `Training day ${day.trainingDay}` : `Rest day ${day.calendarDay}`}</strong>
             <div>${day.date}</div>
             <div class="tiny">${escapeHtml(day.phase)} - Week ${day.week}</div>
             <div>${escapeHtml(day.workout)}</div>
@@ -815,6 +834,7 @@ function renderSettings() {
         <h3>Notifications</h3>
         <p class="tiny">${notificationStatus}</p>
         <button data-action="enable-notifications">Enable reminders</button>
+        <button data-action="test-chime">Test chime</button>
       </div>
       <div class="stat-card">
         <h3>Export backup</h3>
@@ -947,7 +967,6 @@ function setCurrentTrainingDay() {
   const day = selectedPlanDay();
   const workout = $("#planWorkoutSelect")?.value;
   if (!day) return;
-  if (!confirm(`Make training day ${day.trainingDay} today's session? Earlier training days will be marked complete.`)) return;
   if (workout) state.config.workoutOverrides[day.trainingDay] = workout;
   const now = new Date().toISOString();
   state.config.planStartDate = planStartDateForTodayTrainingDay(day.trainingDay);
@@ -971,7 +990,6 @@ function changeSelectedDayWorkout() {
   const day = selectedPlanDay();
   const workout = $("#planWorkoutSelect")?.value;
   if (!day || !workout) return;
-  if (!confirm(`Change training day ${day.trainingDay} to ${workout}? This resets that day's exercise rows.`)) return;
   state.config.workoutOverrides[day.trainingDay] = workout;
   day.workout = workout;
   day.isRest = false;
@@ -1028,6 +1046,79 @@ async function enableNotifications() {
   return enabled;
 }
 
+function getChimeContext() {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) return null;
+  if (!chimeContext) chimeContext = new AudioContextCtor();
+  return chimeContext;
+}
+
+async function playChime(options = {}) {
+  if (!options.force && !state?.config?.chimeEnabled) return false;
+  const context = getChimeContext();
+  if (!context) {
+    toast("Audio is not supported here");
+    return false;
+  }
+  if (context.state === "suspended") {
+    await context.resume();
+  }
+  const now = context.currentTime;
+  const notes = [
+    { frequency: 659.25, start: 0, duration: 0.24, type: "triangle" },
+    { frequency: 880, start: 0.22, duration: 0.24, type: "triangle" },
+    { frequency: 1318.51, start: 0.44, duration: 0.42, type: "square" },
+  ];
+  notes.forEach((note) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = note.type;
+    oscillator.frequency.setValueAtTime(note.frequency, now + note.start);
+    gain.gain.setValueAtTime(0.0001, now + note.start);
+    gain.gain.exponentialRampToValueAtTime(0.42, now + note.start + 0.025);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + note.start + note.duration);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(now + note.start);
+    oscillator.stop(now + note.start + note.duration + 0.03);
+  });
+  return true;
+}
+
+function showVisualAlert(message = "Exercise Snacks") {
+  const pulse = $("#alertPulse");
+  const text = $("#alertPulseText");
+  if (!pulse || !text) return;
+  text.textContent = message;
+  pulse.hidden = false;
+  pulse.style.animation = "none";
+  pulse.offsetHeight;
+  pulse.style.animation = "";
+  window.setTimeout(() => {
+    pulse.hidden = true;
+  }, 2800);
+}
+
+async function testChime() {
+  const played = await playChime({ force: true });
+  showVisualAlert("Test reminder");
+  toast(played ? "Chime played" : "Chime is off");
+}
+
+function testNextBreak() {
+  const day = getNextDay();
+  if (!day) return;
+  const plannedWithIndex = day.entries
+    .map((entry, index) => ({ entry, index }))
+    .filter((item) => item.entry.status === "Planned");
+  if (!plannedWithIndex.length) return;
+  const slot = slotForIndex(plannedWithIndex[0].index);
+  const entries = plannedWithIndex
+    .filter((item) => slotForIndex(item.index) === slot)
+    .map((item) => item.entry);
+  showBreakNotification(slot, "Now", entries, { allowWithoutPermission: true, forceChime: true });
+}
+
 function clearNotificationTimers() {
   notificationTimers.forEach((timer) => window.clearTimeout(timer));
   notificationTimers = [];
@@ -1035,8 +1126,11 @@ function clearNotificationTimers() {
 
 function scheduleNotifications() {
   clearNotificationTimers();
-  if (!state?.config?.notificationsEnabled) return;
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const canShowBrowserNotification = Boolean(
+    state?.config?.notificationsEnabled && "Notification" in window && Notification.permission === "granted",
+  );
+  const canShowInAppAlert = Boolean(state?.config?.chimeEnabled);
+  if (!canShowBrowserNotification && !canShowInAppAlert) return;
   const day = getNextDay();
   if (!day) return;
 
@@ -1054,7 +1148,9 @@ function scheduleNotifications() {
     const [slot, time] = key.split("|");
     const delay = millisecondsUntil(time);
     if (delay < 0) continue;
-    notificationTimers.push(window.setTimeout(() => showBreakNotification(slot, time, entries), delay));
+    notificationTimers.push(window.setTimeout(() => showBreakNotification(slot, time, entries, {
+      allowWithoutPermission: canShowInAppAlert,
+    }), delay));
   }
 }
 
@@ -1072,10 +1168,14 @@ function millisecondsUntil(time) {
   return target.getTime() - now.getTime();
 }
 
-async function showBreakNotification(slot, time, entries) {
-  if (!entries.length || Notification.permission !== "granted") return;
+async function showBreakNotification(slot, time, entries, flags = {}) {
+  if (!entries.length) return;
+  if (!flags.allowWithoutPermission && Notification.permission !== "granted") return;
+  playChime({ force: Boolean(flags.forceChime) });
   const title = `Exercise Snacks: Break ${slot}`;
   const body = entries.map((entry) => `${entry.exercise}: ${entry.targetReps}`).join(" - ");
+  showVisualAlert(`Break ${slot} - ${time}`);
+  if (Notification.permission !== "granted") return;
   const options = {
     body: `${time} - ${body}`,
     tag: `exercise-snacks-${slot}-${time}`,
@@ -1122,6 +1222,8 @@ document.addEventListener("click", (event) => {
   if (action === "set-current-day") setCurrentTrainingDay();
   if (action === "change-day-workout") changeSelectedDayWorkout();
   if (action === "enable-notifications") enableNotifications();
+  if (action === "test-chime") testChime();
+  if (action === "test-next-break") testNextBreak();
   if (action === "export") exportData();
   if (action === "reset") resetData();
 });
@@ -1165,6 +1267,12 @@ $("#notificationsEnabled").addEventListener("change", async () => {
     clearNotificationTimers();
     toast("Notifications off");
   }
+});
+
+$("#chimeEnabled").addEventListener("change", () => {
+  state.config.chimeEnabled = $("#chimeEnabled").checked;
+  saveState();
+  toast(state.config.chimeEnabled ? "Chime on" : "Chime off");
 });
 
 $("#saveActual").addEventListener("click", saveActual);
