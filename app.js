@@ -8,7 +8,7 @@ const user = {
   heightCm: 180,
   maxPullups: 10,
   maxDips: 12,
-  maxFingerPushups: 15,
+  maxPushups: 15,
   maxHandstandPushups: 5,
 };
 
@@ -46,7 +46,6 @@ function loadState() {
       intervalMinutes: 30,
       perBreak: 2,
       notificationsEnabled: false,
-      chimeEnabled: true,
       nightMode: false,
       startSuggestedDate: today,
       manualStartDate: "",
@@ -54,6 +53,7 @@ function loadState() {
       planStartDate: DEFAULT_START_DATE,
       workoutOverrides: {},
       planSchemaVersion: PLAN_SCHEMA_VERSION,
+      profile: { ...user },
     },
     plan: generatePlan(DEFAULT_START_DATE),
     createdAt: new Date().toISOString(),
@@ -66,7 +66,6 @@ function normalizeState(loaded) {
     intervalMinutes: 30,
     perBreak: 2,
     notificationsEnabled: false,
-    chimeEnabled: true,
     nightMode: false,
     startSuggestedDate: localDateStamp(),
     manualStartDate: "",
@@ -74,8 +73,10 @@ function normalizeState(loaded) {
     planStartDate: DEFAULT_START_DATE,
     workoutOverrides: {},
     planSchemaVersion: 0,
+    profile: { ...user },
     ...(loaded?.config || {}),
   };
+  config.profile = normalizeProfile(config.profile);
   config.workoutOverrides = Object.fromEntries(
     Object.entries(config.workoutOverrides || {}).filter(([, workout]) => workoutChoices.includes(workout)),
   );
@@ -93,6 +94,31 @@ function normalizeState(loaded) {
     plan,
     createdAt: loaded?.createdAt || new Date().toISOString(),
   };
+}
+
+function normalizeProfile(profile = {}) {
+  return {
+    bodyWeightKg: positiveNumber(profile.bodyWeightKg, user.bodyWeightKg),
+    heightCm: positiveNumber(profile.heightCm, user.heightCm),
+    maxPullups: wholeNumber(profile.maxPullups, user.maxPullups),
+    maxDips: wholeNumber(profile.maxDips, user.maxDips),
+    maxPushups: wholeNumber(profile.maxPushups ?? profile.maxFingerPushups, user.maxPushups),
+    maxHandstandPushups: wholeNumber(profile.maxHandstandPushups, user.maxHandstandPushups),
+  };
+}
+
+function positiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function wholeNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : fallback;
+}
+
+function profileValue(key) {
+  return state?.config?.profile?.[key] ?? user[key];
 }
 
 function saveState() {
@@ -478,6 +504,8 @@ function buildWorkoutEntries(dayPlan, workout, exposureState) {
         actualReps: "",
         targetWeight,
         actualWeight: "",
+        caloriesBurned: 0,
+        calorieEstimate: null,
         status: "Planned",
         completedAt: "",
         notes: "",
@@ -564,7 +592,6 @@ function syncConfigFromControls() {
     intervalMinutes,
     perBreak: Number($("#perBreak").value || 2),
     notificationsEnabled: $("#notificationsEnabled").checked,
-    chimeEnabled: $("#chimeEnabled").checked,
     nightMode: $("#nightMode")?.checked ?? Boolean(state.config?.nightMode),
     manualStartDate: localDateStamp(),
     schedulePrepared: true,
@@ -583,7 +610,6 @@ function applyConfigToControls() {
     intervalMinutes,
     perBreak: Number(state.config?.perBreak || 2),
     notificationsEnabled: Boolean(state.config?.notificationsEnabled),
-    chimeEnabled: state.config?.chimeEnabled !== false,
     nightMode: Boolean(state.config?.nightMode),
     startSuggestedDate: shouldUseSuggestion ? today : state.config?.startSuggestedDate || today,
     manualStartDate: state.config?.manualStartDate || "",
@@ -596,7 +622,6 @@ function applyConfigToControls() {
   $("#intervalMinutes").value = String(state.config.intervalMinutes);
   $("#perBreak").value = String(state.config.perBreak);
   $("#notificationsEnabled").checked = state.config.notificationsEnabled;
-  $("#chimeEnabled").checked = state.config.chimeEnabled;
   const nightMode = $("#nightMode");
   if (nightMode) nightMode.checked = state.config.nightMode;
   applyTheme();
@@ -652,6 +677,7 @@ function renderToday() {
     .filter((item) => item.entry.status === "Planned");
   const completed = day.entries.filter((entry) => entry.status === "Done").length;
   const skipped = day.entries.filter((entry) => entry.status === "Skipped").length;
+  const calories = day.entries.reduce((sum, entry) => sum + Number(entry.caloriesBurned || 0), 0);
   const sessionInfo = getSessionInfo(day, plannedWithIndex);
   const nextSlot = plannedWithIndex.length ? slotForIndex(plannedWithIndex[0].index) : null;
   const nextTime = plannedWithIndex.length ? plannedTimeForIndex(plannedWithIndex[0].index) : "";
@@ -664,12 +690,12 @@ function renderToday() {
       ${stat("Workout", day.workout)}
       ${stat("Day", day.trainingDay)}
       ${stat("Done", `${completed}/${day.entries.length}`)}
-      ${stat("Skipped", skipped)}
     </section>
     <section class="panel session-info">
       ${stat("Remaining breaks", sessionInfo.remainingBreaks)}
       ${stat("Next break", sessionInfo.nextBreak)}
       ${stat("Session ends", sessionInfo.end)}
+      ${stat("Est. kcal", calories)}
     </section>
     <section class="panel">
       <div class="actions">
@@ -708,6 +734,31 @@ function getSessionInfo(day, plannedWithIndex) {
 
 function stat(label, value) {
   return `<div class="stat-card"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-value">${escapeHtml(value)}</div></div>`;
+}
+
+function metForExercise(entry) {
+  const workout = String(entry.workout || "").toLowerCase();
+  const exercise = String(entry.exercise || "").toLowerCase();
+  if (workout.includes("stretch") || exercise.includes("stretch")) return 2.3;
+  if (workout.includes("plyometrics") || exercise.includes("jump") || exercise.includes("hop") || exercise.includes("leap")) return 8;
+  if (workout.includes("kenpo") || exercise.includes("kick") || exercise.includes("punch") || exercise.includes("block")) return 7;
+  if (exercise.includes("pull-up") || exercise.includes("chin-up") || exercise.includes("push-up") || exercise.includes("dip")) return 6;
+  if (exercise.includes("ab") || exercise.includes("crunch") || exercise.includes("sit-up") || exercise.includes("plank") || exercise.includes("banana")) return 4.5;
+  if (entry.targetWeight) return 4.8;
+  return 4;
+}
+
+function estimatedMinutesForEntry(entry) {
+  if (entry.trackingType === "Seconds") return Math.max(0.25, Number(entry.actualReps || entry.targetReps || 30) / 60);
+  const reps = Number(entry.actualReps || entry.targetReps || 10);
+  return Math.max(0.25, (reps * 2.5) / 60);
+}
+
+function estimateCalories(entry) {
+  const met = metForExercise(entry);
+  const minutes = estimatedMinutesForEntry(entry);
+  const bodyWeightKg = profileValue("bodyWeightKg");
+  return Math.max(0, Math.round((minutes * met * 3.5 * bodyWeightKg) / 200));
 }
 
 function exerciseRow(entry) {
@@ -799,6 +850,7 @@ function renderProgress() {
   const allEntries = state.plan.flatMap((day) => day.entries);
   const done = allEntries.filter((entry) => entry.status === "Done");
   const skipped = allEntries.filter((entry) => entry.status === "Skipped");
+  const totalCalories = done.reduce((sum, entry) => sum + Number(entry.caloriesBurned || 0), 0);
   const byExercise = new Map();
   done.forEach((entry) => {
     if (!byExercise.has(entry.exercise)) byExercise.set(entry.exercise, []);
@@ -812,9 +864,9 @@ function renderProgress() {
   $("#progressView").innerHTML = `
     <section class="progress-grid">
       ${stat("Completed snacks", done.length)}
+      ${stat("Est. calories", totalCalories)}
       ${stat("Skipped", skipped.length)}
       ${stat("Exercises improved", improved)}
-      ${stat("Total plan rows", allEntries.length)}
     </section>
     <section class="panel">
       <h2>Recent completions</h2>
@@ -835,6 +887,7 @@ function renderProgress() {
 
 function renderSettings() {
   const notificationStatus = notificationSupportText();
+  const profile = state.config.profile;
   $("#settingsView").innerHTML = `
     <section class="panel">
       <h2>Settings and data</h2>
@@ -843,13 +896,39 @@ function renderSettings() {
     <section class="settings-grid">
       <div class="stat-card">
         <h3>Profile baseline</h3>
-        <p class="tiny">${user.bodyWeightKg} kg - ${user.heightCm} cm - ${user.maxPullups} pull-ups - ${user.maxDips} dips - ${user.maxHandstandPushups} handstand push-ups</p>
+        <div class="profile-grid">
+          <label>
+            Weight (kg)
+            <input id="profileBodyWeightKg" type="number" min="1" step="0.1" value="${escapeHtml(profile.bodyWeightKg)}">
+          </label>
+          <label>
+            Height (cm)
+            <input id="profileHeightCm" type="number" min="1" step="1" value="${escapeHtml(profile.heightCm)}">
+          </label>
+          <label>
+            Max pull-ups
+            <input id="profileMaxPullups" type="number" min="0" step="1" value="${escapeHtml(profile.maxPullups)}">
+          </label>
+          <label>
+            Max dips
+            <input id="profileMaxDips" type="number" min="0" step="1" value="${escapeHtml(profile.maxDips)}">
+          </label>
+          <label>
+            Max push-ups
+            <input id="profileMaxPushups" type="number" min="0" step="1" value="${escapeHtml(profile.maxPushups)}">
+          </label>
+          <label>
+            Max handstand push-ups
+            <input id="profileMaxHandstandPushups" type="number" min="0" step="1" value="${escapeHtml(profile.maxHandstandPushups)}">
+          </label>
+        </div>
+        <p class="tiny">Weight is used for estimated calorie burn.</p>
+        <button data-action="save-profile">Save profile</button>
       </div>
       <div class="stat-card">
         <h3>Notifications</h3>
-        <p class="tiny">${notificationStatus}</p>
+        <p class="tiny">${notificationStatus} Includes the in-app chime and visual break alert.</p>
         <button data-action="enable-notifications">Enable reminders</button>
-        <button data-action="test-chime">Test chime</button>
       </div>
       <div class="stat-card">
         <h3>Appearance</h3>
@@ -883,12 +962,19 @@ function findEntry(id) {
 function markDone(id) {
   const entry = findEntry(id);
   if (!entry) return;
+  const calories = estimateCalories(entry);
   entry.status = "Done";
   entry.actualReps = entry.targetReps;
   entry.actualWeight = entry.targetWeight;
+  entry.caloriesBurned = calories;
+  entry.calorieEstimate = {
+    met: metForExercise(entry),
+    minutes: estimatedMinutesForEntry(entry),
+    bodyWeightKg: profileValue("bodyWeightKg"),
+  };
   entry.completedAt = new Date().toISOString();
   saveState();
-  toast("Saved");
+  toast(`Saved +${calories} kcal`);
   render();
 }
 
@@ -910,11 +996,18 @@ function saveActual(event) {
   entry.status = "Done";
   entry.actualReps = $("#actualReps").value || entry.targetReps;
   entry.actualWeight = $("#actualWeight").value || entry.targetWeight;
+  const calories = estimateCalories(entry);
+  entry.caloriesBurned = calories;
+  entry.calorieEstimate = {
+    met: metForExercise(entry),
+    minutes: estimatedMinutesForEntry(entry),
+    bodyWeightKg: profileValue("bodyWeightKg"),
+  };
   entry.notes = $("#actualNote").value;
   entry.completedAt = new Date().toISOString();
   $("#actualDialog").close();
   saveState();
-  toast("Actual result saved");
+  toast(`Actual saved +${calories} kcal`);
   render();
 }
 
@@ -964,6 +1057,8 @@ function resetEntryProgress(entry) {
   entry.status = "Planned";
   entry.actualReps = "";
   entry.actualWeight = "";
+  entry.caloriesBurned = 0;
+  entry.calorieEstimate = null;
   entry.completedAt = "";
   entry.notes = "";
 }
@@ -972,6 +1067,12 @@ function completeEntry(entry, completedAt) {
   entry.status = "Done";
   entry.actualReps = entry.targetReps;
   entry.actualWeight = entry.targetWeight;
+  entry.caloriesBurned = estimateCalories(entry);
+  entry.calorieEstimate = {
+    met: metForExercise(entry),
+    minutes: estimatedMinutesForEntry(entry),
+    bodyWeightKg: profileValue("bodyWeightKg"),
+  };
   entry.completedAt = completedAt;
   entry.notes = "Marked complete by plan adjustment";
 }
@@ -1039,6 +1140,20 @@ function resetData() {
   toast("Reset complete");
 }
 
+function saveProfile() {
+  state.config.profile = normalizeProfile({
+    bodyWeightKg: $("#profileBodyWeightKg").value,
+    heightCm: $("#profileHeightCm").value,
+    maxPullups: $("#profileMaxPullups").value,
+    maxDips: $("#profileMaxDips").value,
+    maxPushups: $("#profileMaxPushups").value,
+    maxHandstandPushups: $("#profileMaxHandstandPushups").value,
+  });
+  saveState();
+  render();
+  toast("Profile saved");
+}
+
 function notificationSupportText() {
   if (!("Notification" in window)) return "This browser does not support local notifications.";
   if (Notification.permission === "granted") return "Allowed. Reminders can appear for planned breaks while the app is open or installed.";
@@ -1061,10 +1176,14 @@ async function enableNotifications() {
   const enabled = permission === "granted";
   state.config.notificationsEnabled = enabled;
   $("#notificationsEnabled").checked = enabled;
+  if (enabled) {
+    playChime({ force: true });
+    showVisualAlert("Notifications ready");
+  }
   saveState();
   renderSettings();
   scheduleNotifications();
-  toast(enabled ? "Notifications enabled" : "Notifications not enabled");
+  toast(enabled ? "Notifications and chime enabled" : "Notifications not enabled");
   return enabled;
 }
 
@@ -1076,7 +1195,7 @@ function getChimeContext() {
 }
 
 async function playChime(options = {}) {
-  if (!options.force && !state?.config?.chimeEnabled) return false;
+  if (!options.force && !state?.config?.notificationsEnabled) return false;
   const context = getChimeContext();
   if (!context) {
     toast("Audio is not supported here");
@@ -1121,12 +1240,6 @@ function showVisualAlert(message = "Exercise Snacks") {
   }, 2800);
 }
 
-async function testChime() {
-  const played = await playChime({ force: true });
-  showVisualAlert("Test reminder");
-  toast(played ? "Chime played" : "Chime is off");
-}
-
 function clearNotificationTimers() {
   notificationTimers.forEach((timer) => window.clearTimeout(timer));
   notificationTimers = [];
@@ -1137,7 +1250,7 @@ function scheduleNotifications() {
   const canShowBrowserNotification = Boolean(
     state?.config?.notificationsEnabled && "Notification" in window && Notification.permission === "granted",
   );
-  const canShowInAppAlert = Boolean(state?.config?.chimeEnabled);
+  const canShowInAppAlert = Boolean(state?.config?.notificationsEnabled);
   if (!canShowBrowserNotification && !canShowInAppAlert) return;
   const day = getNextDay();
   if (!day) return;
@@ -1230,7 +1343,7 @@ document.addEventListener("click", (event) => {
   if (action === "set-current-day") setCurrentTrainingDay();
   if (action === "change-day-workout") changeSelectedDayWorkout();
   if (action === "enable-notifications") enableNotifications();
-  if (action === "test-chime") testChime();
+  if (action === "save-profile") saveProfile();
   if (action === "export") exportData();
   if (action === "reset") resetData();
 });
@@ -1281,12 +1394,6 @@ $("#notificationsEnabled").addEventListener("change", async () => {
     clearNotificationTimers();
     toast("Notifications off");
   }
-});
-
-$("#chimeEnabled").addEventListener("change", () => {
-  state.config.chimeEnabled = $("#chimeEnabled").checked;
-  saveState();
-  toast(state.config.chimeEnabled ? "Chime on" : "Chime off");
 });
 
 $("#saveActual").addEventListener("click", saveActual);
