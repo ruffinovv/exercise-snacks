@@ -342,6 +342,15 @@ button {
   gap: 6px;
 }
 
+.session-actions {
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.session-actions label {
+  min-width: 130px;
+}
+
 .actions button {
   min-height: 36px;
   padding: 6px 9px;

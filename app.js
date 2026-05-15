@@ -35,6 +35,7 @@ let chimeContext = null;
 const START_STEP_MINUTES = 5;
 const INTERVAL_OPTIONS = Array.from({ length: 12 }, (_, index) => (index + 1) * 5);
 const PER_BREAK_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1);
+const POSTPONE_OPTIONS = [5, 10, 15, 30, 45, 60];
 
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -45,6 +46,7 @@ function loadState() {
       startTime: suggestedStartTime(new Date(), 30),
       intervalMinutes: 30,
       perBreak: 2,
+      breakDelayMinutes: 0,
       notificationsEnabled: false,
       nightMode: false,
       startSuggestedDate: today,
@@ -65,6 +67,7 @@ function normalizeState(loaded) {
     startTime: suggestedStartTime(new Date(), 30),
     intervalMinutes: 30,
     perBreak: 2,
+    breakDelayMinutes: 0,
     notificationsEnabled: false,
     nightMode: false,
     startSuggestedDate: localDateStamp(),
@@ -563,7 +566,8 @@ function slotForIndex(index) {
 
 function plannedTimeForIndex(index) {
   const slot = slotForIndex(index);
-  return addMinutesToTime(parseTime(state.config.startTime), (slot - 1) * state.config.intervalMinutes, {
+  const delay = Number(state.config.breakDelayMinutes || 0);
+  return addMinutesToTime(parseTime(state.config.startTime), (slot - 1) * state.config.intervalMinutes + delay, {
     showDayOffset: true,
   });
 }
@@ -591,6 +595,7 @@ function syncConfigFromControls() {
     startTime,
     intervalMinutes,
     perBreak: Number($("#perBreak").value || 2),
+    breakDelayMinutes: 0,
     notificationsEnabled: $("#notificationsEnabled").checked,
     nightMode: $("#nightMode")?.checked ?? Boolean(state.config?.nightMode),
     manualStartDate: localDateStamp(),
@@ -609,6 +614,7 @@ function applyConfigToControls() {
     startTime: shouldUseSuggestion ? suggested : normalizeTime(state.config?.startTime, suggested),
     intervalMinutes,
     perBreak: Number(state.config?.perBreak || 2),
+    breakDelayMinutes: Math.max(0, Number(state.config?.breakDelayMinutes || 0)),
     notificationsEnabled: Boolean(state.config?.notificationsEnabled),
     nightMode: Boolean(state.config?.nightMode),
     startSuggestedDate: shouldUseSuggestion ? today : state.config?.startSuggestedDate || today,
@@ -698,7 +704,14 @@ function renderToday() {
       ${stat("Est. kcal", calories)}
     </section>
     <section class="panel">
-      <div class="actions">
+      <div class="actions session-actions">
+        <label>
+          Postpone
+          <select id="postponeMinutes">
+            ${POSTPONE_OPTIONS.map((minutes) => `<option value="${minutes}">${minutes} min</option>`).join("")}
+          </select>
+        </label>
+        <button data-action="postpone-break">Postpone next break</button>
         <button data-action="reset-today" data-day="${day.trainingDay}">Reset today</button>
         <button class="secondary" data-action="skip-day" data-day="${day.trainingDay}">Skip this day</button>
       </div>
@@ -726,8 +739,9 @@ function getSessionInfo(day, plannedWithIndex) {
   const remainingBreaks = new Set(plannedWithIndex.map((item) => slotForIndex(item.index))).size;
   const nextBreak = plannedWithIndex.length ? plannedTimeForIndex(plannedWithIndex[0].index) : "Complete";
   const start = parseTime(state.config.startTime);
+  const delay = Number(state.config.breakDelayMinutes || 0);
   const end = state.config.schedulePrepared
-    ? addMinutesToTime(start, totalBreaks * state.config.intervalMinutes, { showDayOffset: true })
+    ? addMinutesToTime(start, totalBreaks * state.config.intervalMinutes + delay, { showDayOffset: true })
     : "Press Prepare";
   return { remainingBreaks, nextBreak, end };
 }
@@ -1041,6 +1055,7 @@ function resetToday() {
   const day = getNextDay();
   if (!day) return;
   if (!confirm("Reset today and clear all Done/Skipped entries for this day?")) return;
+  state.config.breakDelayMinutes = 0;
   day.entries.forEach((entry) => {
     entry.status = "Planned";
     entry.actualReps = "";
@@ -1051,6 +1066,15 @@ function resetToday() {
   saveState();
   toast("Today reset");
   render();
+}
+
+function postponeNextBreak() {
+  const minutes = Number($("#postponeMinutes")?.value || 0);
+  if (!minutes) return;
+  state.config.breakDelayMinutes = Math.max(0, Number(state.config.breakDelayMinutes || 0)) + minutes;
+  saveState();
+  renderToday();
+  toast(`Next break postponed ${minutes} min`);
 }
 
 function resetEntryProgress(entry) {
@@ -1340,6 +1364,7 @@ document.addEventListener("click", (event) => {
   if (action === "skip") skipEntry(id);
   if (action === "skip-day") skipCurrentDay();
   if (action === "reset-today") resetToday();
+  if (action === "postpone-break") postponeNextBreak();
   if (action === "set-current-day") setCurrentTrainingDay();
   if (action === "change-day-workout") changeSelectedDayWorkout();
   if (action === "enable-notifications") enableNotifications();
